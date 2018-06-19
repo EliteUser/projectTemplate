@@ -1,12 +1,11 @@
-"use strict";
+const project = require("./projectConfig.json");
+const fs = require("fs");
 
 const gulp = require("gulp");
 const browserSync = require("browser-sync").create();
 const sass = require("gulp-sass");
 const plumber = require("gulp-plumber");
 const postcss = require("gulp-postcss");
-const posthtml = require("gulp-posthtml");
-const include = require("posthtml-include");
 const autoprefixer = require("autoprefixer");
 const minify = require("gulp-csso");
 const rename = require("gulp-rename");
@@ -18,6 +17,11 @@ const del = require("del");
 const babel = require("gulp-babel");
 const concat = require("gulp-concat");
 const uglifyJs = require("gulp-uglifyjs");
+const pug = require("gulp-pug");
+const htmlbeautify = require("gulp-html-beautify");
+const data = require("gulp-data");
+const path = require("path");
+const merge = require("gulp-merge-json");
 
 /* Директории: исходники и сборка */
 
@@ -33,9 +37,9 @@ gulp.task("browserSync", function () {
     server: config.build
   });
 
-  gulp.watch(`${config.src}/scss/**/*.{scss,sass}`, ["style"]);
+  gulp.watch(`${config.src}/**/*.{scss,sass}`, ["style"]);
+  gulp.watch(`${config.src}/**/*.{pug,json}`, ["pug"]);
   gulp.watch(`${config.src}/js/**/*.js`, ["js"]);
-  gulp.watch(`${config.src}/*.html`, ["html"]);
   gulp.watch(`${config.build}/**/*.*`).on('change', browserSync.reload);
 });
 
@@ -122,23 +126,72 @@ gulp.task("sprite", function () {
     }))
     .pipe(rename("sprite.svg"))
     .pipe(gulp.dest(`${config.build}/img`))
+
 });
 
-/* Инлайнинг спрайта в HTML */
+/* Сборка данных из JSON */
 
-gulp.task("html", function () {
-  return gulp.src(`${config.src}/*.html`)
+gulp.task('pug:data', function () {
+  return gulp.src(`${config.src}/**/*.json`)
+    .pipe(merge({
+      fileName: 'data.json',
+      edit: (json, file) => {
+        // Extract the filename and strip the extension
+        let filename = path.basename(file.path),
+          primaryKey = filename.replace(path.extname(filename), '');
+
+        // Set the filename as the primary key for our JSON data
+        let data = {};
+        data[primaryKey.toLowerCase()] = json;
+
+        return data;
+      }
+    }))
+    .pipe(gulp.dest(`${config.src}/temp`));
+});
+
+/* Сборка Pug */
+
+gulp.task('pug-build', ['pug:data'], function () {
+  const options = {
+    indent_size: 2,
+    unformatted: [ // https://www.w3.org/TR/html5/dom.html#phrasing-content
+      'abbr', 'area', 'b', 'bdi', 'bdo', 'br', 'cite',
+      'code', 'data', 'datalist', 'del', 'dfn', 'em', 'embed', 'i', 'ins', 'kbd', 'keygen', 'map', 'mark', 'math', 'meter', 'noscript',
+      'object', 'output', 'progress', 'q', 'ruby', 's', 'samp', 'small',
+      'strong', 'sub', 'sup', 'template', 'time', 'u', 'var', 'wbr', 'text',
+      'acronym', 'address', 'big', 'dt', 'ins', 'strike', 'tt'
+    ]
+  };
+
+  return gulp.src(project.pages)
     .pipe(plumber())
-    .pipe(posthtml([
-      include()
-    ]))
-    .pipe(gulp.dest(config.build))
+    .pipe(data(function () {
+      if (fileExist(`${config.src}/temp/data.json`)) {
+        return JSON.parse(fs.readFileSync(`${config.src}/temp/data.json`))
+      }
+    }))
+    .pipe(pug({
+      pretty: true
+    }))
+    .pipe(htmlbeautify(options))
+    .pipe(gulp.dest(config.build));
+});
+
+/* Удаление data.json */
+
+gulp.task("data-remove", function () {
+  return del(`${config.src}/temp`);
+});
+
+gulp.task("pug", function () {
+  run("pug-build", "data-remove");
 });
 
 /* Удаление папки с билдом */
 
 gulp.task("clean", function () {
-  return del(config.build)
+  return del(config.build);
 });
 
 /* Копирование в папку с билдом */
@@ -163,8 +216,21 @@ gulp.task("build", function (done) {
     "normalize",
     "style",
     "sprite",
-    "html",
+    "pug",
+    "data-remove",
     "js",
     done
   );
 });
+
+/* Дополнительные функции */
+
+function fileExist(filepath) {
+  let flag = true;
+  try {
+    fs.accessSync(filepath, fs.F_OK);
+  } catch (e) {
+    flag = false;
+  }
+  return flag;
+}
